@@ -19,7 +19,7 @@ import numpy as np
 DIST_STOP_M = 0.50
 DIST_CAUTION_M = 1.50
 
-AVOID_MIN_CLEARANCE_M = 0.70
+AVOID_MIN_CLEARANCE_M = 1.00
 
 
 # ============================================================
@@ -298,7 +298,7 @@ def decide(zones):
 
     return {
         "status": "GO",
-        "throttle": 0.7,
+        "throttle": 1,
         "steer": steer,
         "action": "GO"
     }
