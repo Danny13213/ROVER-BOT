@@ -183,7 +183,7 @@ void turnLeft() {
   digitalWrite(BIN1, HIGH);
   digitalWrite(BIN2, LOW);
 
-  analogWrite(PWMA, leftSpeed);
+  analogWrite(PWMA, leftSpeed / 2);
   analogWrite(PWMB, rightSpeed);
 }
 
@@ -203,7 +203,7 @@ void turnRight() {
   digitalWrite(BIN2, HIGH);
 
   analogWrite(PWMA, leftSpeed);
-  analogWrite(PWMB, rightSpeed);
+  analogWrite(PWMB, rightSpeed / 2);
 }
 
 
