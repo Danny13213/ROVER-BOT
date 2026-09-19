@@ -578,7 +578,8 @@ int main()
 
     cout
         << "Hold D = Right\n\n";
-
+     cout
+        << "Hold S = Reverse\n\n";
 
     cout
         << "U = Left PWM +5\n";
@@ -980,7 +981,10 @@ int main()
                         'L';
                 }
 
-
+                else if (key == 's')
+{
+    command = 'B';
+}
                 if (command != 0)
                 {
                     if (
@@ -1021,6 +1025,16 @@ int main()
                             cout
                                 << "LEFT\n";
                         }
+                            else if (key == 's')
+{
+    cout
+        << "REVERSE"
+        << "  L="
+        << leftSpeed
+        << " R="
+        << rightSpeed
+        << "\n";
+}
 
 
                         else if (key == 'd')
