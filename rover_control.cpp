@@ -32,11 +32,10 @@ void sendCommand(int esp, char command)
 
 // ==========================================
 // SET LEFT MOTOR SPEED
+//
+// ESP32:
+// A200 = left PWM 200
 // ==========================================
-//
-// ESP32 command:
-// A120 = Left PWM 120
-//
 
 void setLeftSpeed(int esp, int speed)
 {
@@ -59,11 +58,10 @@ void setLeftSpeed(int esp, int speed)
 
 // ==========================================
 // SET RIGHT MOTOR SPEED
+//
+// ESP32:
+// C200 = right PWM 200
 // ==========================================
-//
-// ESP32 command:
-// C120 = Right PWM 120
-//
 
 void setRightSpeed(int esp, int speed)
 {
@@ -154,8 +152,7 @@ int main()
     if (!setupSerial(esp))
     {
         cerr
-            << "ERROR: Could not configure "
-            << "serial port.\n";
+            << "ERROR: Could not configure serial port.\n";
 
         close(esp);
 
@@ -191,7 +188,7 @@ int main()
     );
 
 
-    // Make stdin non-blocking
+    // Make keyboard input non-blocking
 
     int oldFlags =
         fcntl(
@@ -218,19 +215,19 @@ int main()
     char currentMovement = 'S';
 
 
-    // --------------------------------------
-    // MOTOR SPEED
-    // --------------------------------------
+    // ======================================
+    // MOTOR SPEEDS
+    // ======================================
 
-    int leftSpeed = 120;
-    int rightSpeed = 120;
+    int leftSpeed = 200;
+    int rightSpeed = 200;
 
     const int SPEED_STEP = 5;
 
 
-    // --------------------------------------
+    // ======================================
     // DEAD-MAN TIMER
-    // --------------------------------------
+    // ======================================
 
     auto lastMovementCommand =
         steady_clock::now();
@@ -246,14 +243,12 @@ int main()
     // Start stopped
     sendCommand(esp, 'S');
 
-    // Give ESP32 our initial PWM values
+    // Send starting PWM values
     setLeftSpeed(
         esp,
         leftSpeed
     );
 
-    // Small delay prevents commands
-    // from arriving too close together
     this_thread::sleep_for(
         milliseconds(60)
     );
@@ -285,9 +280,6 @@ int main()
         << "Hold W = Forward\n";
 
     cout
-        << "Hold S = Backward\n";
-
-    cout
         << "Hold A = Left\n";
 
     cout
@@ -308,7 +300,7 @@ int main()
         << "K = Right PWM -5\n";
 
     cout
-        << "P = Show motor PWM\n";
+        << "P = Show PWM\n";
 
     cout << "\n";
 
@@ -420,8 +412,7 @@ int main()
 
             else if (key == 'm')
             {
-                // Always stop before
-                // changing modes
+                // Stop before switching modes
 
                 sendCommand(
                     esp,
@@ -567,7 +558,7 @@ int main()
 
 
             // ==============================
-            // SHOW PWM
+            // DISPLAY PWM
             // ==============================
 
             else if (key == 'p')
@@ -595,31 +586,38 @@ int main()
                 char command = 0;
 
 
+                // FORWARD
                 if (key == 'w')
                 {
                     command = 'F';
                 }
 
-                else if (key == 's')
-                {
-                    command = 'B';
-                }
 
+                // IMPORTANT:
+                //
+                // Your physical left/right
+                // directions are reversed.
+                //
+                // A should physically turn LEFT,
+                // so send R to the ESP32.
                 else if (key == 'a')
-                {
-                    command = 'L';
-                }
-
-                else if (key == 'd')
                 {
                     command = 'R';
                 }
 
 
+                // D should physically turn RIGHT,
+                // so send L to the ESP32.
+                else if (key == 'd')
+                {
+                    command = 'L';
+                }
+
+
                 if (command != 0)
                 {
-                    // Send only when direction
-                    // changes
+                    // Send only when the
+                    // direction changes
 
                     if (
                         !moving ||
@@ -637,7 +635,7 @@ int main()
                         moving = true;
 
 
-                        if (command == 'F')
+                        if (key == 'w')
                         {
                             cout
                                 << "FORWARD"
@@ -648,18 +646,7 @@ int main()
                                 << "\n";
                         }
 
-                        else if (command == 'B')
-                        {
-                            cout
-                                << "BACKWARD"
-                                << "  L="
-                                << leftSpeed
-                                << " R="
-                                << rightSpeed
-                                << "\n";
-                        }
-
-                        else if (command == 'L')
+                        else if (key == 'a')
                         {
                             cout
                                 << "LEFT"
@@ -670,7 +657,7 @@ int main()
                                 << "\n";
                         }
 
-                        else if (command == 'R')
+                        else if (key == 'd')
                         {
                             cout
                                 << "RIGHT"
@@ -683,8 +670,7 @@ int main()
                     }
 
 
-                    // Keyboard repeat refreshes
-                    // dead-man timer
+                    // Refresh dead-man timer
 
                     lastMovementCommand =
                         steady_clock::now();
@@ -738,9 +724,38 @@ int main()
 
         if (mode == AUTO)
         {
-          
+            /*
+             * Autonomous navigation will
+             * go here.
+             *
+             * Eventually:
+             *
+             * Astra depth camera
+             *       |
+             *       v
+             *
+             * LEFT / CENTER / RIGHT
+             * distance measurements
+             *
+             *       |
+             *       v
+             *
+             * Decide:
+             *
+             * F = forward
+             * R = physical left
+             * L = physical right
+             * S = stop
+             *
+             *       |
+             *       v
+             *
+             * ESP32
+             */
         }
 
+
+        // Prevent CPU from running at 100%
 
         this_thread::sleep_for(
             milliseconds(5)
@@ -758,7 +773,7 @@ int main()
     );
 
 
-    // Restore SSH terminal
+    // Restore terminal
 
     tcsetattr(
         STDIN_FILENO,
@@ -775,6 +790,14 @@ int main()
 
 
     close(esp);
+
+
+    cout
+        << "Controller closed.\n";
+
+
+    return 0;
+}
 
 
     cout
