@@ -11,19 +11,27 @@
 #include <chrono>
 #include <thread>
 
-
 using namespace std;
 using namespace std::chrono;
 
 
 // ============================================================
-// MODE
+// MODES
 // ============================================================
 
 enum Mode
 {
     MANUAL,
     AUTO
+};
+
+enum AutoState
+{
+    AUTO_DRIVE,
+    AUTO_STOPPED,
+    AUTO_SCAN,
+    AUTO_TURN_TO_BEST,
+    AUTO_REVERSE
 };
 
 
@@ -47,7 +55,7 @@ struct NavData
 
 
 // ============================================================
-// SERIAL COMMAND
+// SERIAL
 // ============================================================
 
 void sendCommand(
@@ -64,7 +72,7 @@ void sendCommand(
 
 
 // ============================================================
-// LEFT MOTOR PWM
+// MOTOR PWM
 // ============================================================
 
 void setLeftSpeed(
@@ -72,13 +80,11 @@ void setLeftSpeed(
     int speed
 )
 {
-    speed = max(
-        0,
-        min(
-            255,
-            speed
-        )
-    );
+    speed =
+        max(
+            0,
+            min(255, speed)
+        );
 
     string command =
         "A"
@@ -93,22 +99,16 @@ void setLeftSpeed(
 }
 
 
-// ============================================================
-// RIGHT MOTOR PWM
-// ============================================================
-
 void setRightSpeed(
     int esp,
     int speed
 )
 {
-    speed = max(
-        0,
-        min(
-            255,
-            speed
-        )
-    );
+    speed =
+        max(
+            0,
+            min(255, speed)
+        );
 
     string command =
         "C"
@@ -127,22 +127,12 @@ void setRightSpeed(
 // SERIAL SETUP
 // ============================================================
 
-bool setupSerial(
-    int fd
-)
+bool setupSerial(int fd)
 {
     termios tty{};
 
-    if (
-        tcgetattr(
-            fd,
-            &tty
-        ) != 0
-    )
-    {
+    if (tcgetattr(fd, &tty) != 0)
         return false;
-    }
-
 
     cfsetospeed(
         &tty,
@@ -154,43 +144,24 @@ bool setupSerial(
         B115200
     );
 
-
     tty.c_cflag &= ~CSIZE;
-
     tty.c_cflag |= CS8;
 
-
     tty.c_iflag &=
-        ~(
-            IXON
-            | IXOFF
-            | IXANY
-        );
-
+        ~(IXON | IXOFF | IXANY);
 
     tty.c_lflag = 0;
-
     tty.c_oflag = 0;
 
-
     tty.c_cflag |=
-        (
-            CLOCAL
-            | CREAD
-        );
-
+        (CLOCAL | CREAD);
 
     tty.c_cflag &= ~PARENB;
-
     tty.c_cflag &= ~CSTOPB;
-
     tty.c_cflag &= ~CRTSCTS;
 
-
     tty.c_cc[VMIN] = 0;
-
     tty.c_cc[VTIME] = 1;
-
 
     return (
         tcsetattr(
@@ -203,7 +174,7 @@ bool setupSerial(
 
 
 // ============================================================
-// READ NAVIGATION FILE
+// READ CAMERA NAVIGATION
 // ============================================================
 
 bool readNavigation(
@@ -215,10 +186,7 @@ bool readNavigation(
     );
 
     if (!file.is_open())
-    {
         return false;
-    }
-
 
     file
         >> nav.timestamp
@@ -229,13 +197,12 @@ bool readNavigation(
         >> nav.steer
         >> nav.status;
 
-
     return !file.fail();
 }
 
 
 // ============================================================
-// CHECK CAMERA DATA AGE
+// CAMERA WATCHDOG
 // ============================================================
 
 bool navigationFresh(
@@ -250,24 +217,20 @@ bool navigationFresh(
             now.time_since_epoch()
         ).count();
 
-
     double age =
         currentTime
         - nav.timestamp;
 
-
-    // Camera information older than
-    // 500 ms is considered unsafe.
-
     return (
         age >= 0.0
-        && age <= 0.5
+        &&
+        age <= 0.5
     );
 }
 
 
 // ============================================================
-// AUTONOMOUS MOTOR MIXING
+// AUTONOMOUS PWM MIXER
 // ============================================================
 
 void calculateAutoPWM(
@@ -279,36 +242,23 @@ void calculateAutoPWM(
     int &rightPWM
 )
 {
-    // --------------------------------------------------------
-    // NO AUTONOMOUS REVERSE
-    // --------------------------------------------------------
+    throttle =
+        max(
+            0.0,
+            min(
+                1.0,
+                fabs(throttle)
+            )
+        );
 
-    if (throttle <= 0.0)
-    {
-        leftPWM = 0;
-        rightPWM = 0;
-
-        return;
-    }
-
-
-    throttle = max(
-        0.0,
-        min(
-            1.0,
-            throttle
-        )
-    );
-
-
-    steer = max(
-        -1.0,
-        min(
-            1.0,
-            steer
-        )
-    );
-
+    steer =
+        max(
+            -1.0,
+            min(
+                1.0,
+                steer
+            )
+        );
 
     double leftFactor =
         throttle;
@@ -317,13 +267,7 @@ void calculateAutoPWM(
         throttle;
 
 
-    // --------------------------------------------------------
-    // LEFT TURN
-    //
-    // Negative steer = left.
-    // Slow LEFT track.
-    // --------------------------------------------------------
-
+    // LEFT
     if (steer < 0.0)
     {
         leftFactor *=
@@ -333,14 +277,7 @@ void calculateAutoPWM(
             );
     }
 
-
-    // --------------------------------------------------------
-    // RIGHT TURN
-    //
-    // Positive steer = right.
-    // Slow RIGHT track.
-    // --------------------------------------------------------
-
+    // RIGHT
     else if (steer > 0.0)
     {
         rightFactor *=
@@ -357,7 +294,6 @@ void calculateAutoPWM(
             * leftFactor
         );
 
-
     rightPWM =
         static_cast<int>(
             maxRight
@@ -373,7 +309,6 @@ void calculateAutoPWM(
                 leftPWM
             )
         );
-
 
     rightPWM =
         max(
@@ -396,15 +331,11 @@ int main()
         "/dev/ttyUSB0";
 
 
-    // --------------------------------------------------------
-    // OPEN ESP32
-    // --------------------------------------------------------
-
-    int esp = open(
-        espDevice,
-        O_RDWR
-        | O_NOCTTY
-    );
+    int esp =
+        open(
+            espDevice,
+            O_RDWR | O_NOCTTY
+        );
 
 
     if (esp < 0)
@@ -412,7 +343,7 @@ int main()
         cerr
             << "ERROR: Could not open "
             << espDevice
-            << endl;
+            << "\n";
 
         return 1;
     }
@@ -421,8 +352,7 @@ int main()
     if (!setupSerial(esp))
     {
         cerr
-            << "ERROR: Could not configure "
-            << "serial port.\n";
+            << "ERROR: Serial setup failed.\n";
 
         close(esp);
 
@@ -430,35 +360,26 @@ int main()
     }
 
 
-    // --------------------------------------------------------
-    // TERMINAL SETUP
-    // --------------------------------------------------------
+    // ========================================================
+    // TERMINAL
+    // ========================================================
 
     termios oldTerminal;
     termios newTerminal;
-
 
     tcgetattr(
         STDIN_FILENO,
         &oldTerminal
     );
 
-
     newTerminal =
         oldTerminal;
 
-
     newTerminal.c_lflag &=
-        ~(
-            ICANON
-            | ECHO
-        );
-
+        ~(ICANON | ECHO);
 
     newTerminal.c_cc[VMIN] = 0;
-
     newTerminal.c_cc[VTIME] = 0;
-
 
     tcsetattr(
         STDIN_FILENO,
@@ -474,79 +395,160 @@ int main()
             0
         );
 
-
     fcntl(
         STDIN_FILENO,
         F_SETFL,
-        oldFlags
-        | O_NONBLOCK
+        oldFlags | O_NONBLOCK
     );
 
 
-    // --------------------------------------------------------
-    // CONTROLLER VARIABLES
-    // --------------------------------------------------------
+    // ========================================================
+    // SETTINGS
+    // ========================================================
 
     Mode mode =
         MANUAL;
 
-
-    bool moving =
-        false;
-
-
-    char currentMovement =
-        'S';
+    AutoState autoState =
+        AUTO_DRIVE;
 
 
     int leftSpeed =
         200;
 
-
     int rightSpeed =
         200;
-
 
     const int SPEED_STEP =
         5;
 
 
+    // --------------------------------------------------------
+    // SCAN SETTINGS
+    // --------------------------------------------------------
+
+    const int SCAN_PWM =
+        110;
+
+    /*
+     * IMPORTANT:
+     *
+     * This must be calibrated.
+     *
+     * Start around 4 seconds.
+     *
+     * Increase if rover turns < 360 degrees.
+     * Decrease if rover turns > 360 degrees.
+     */
+
+    const milliseconds
+        FULL_SCAN_TIME(4000);
+
+
+    // Number of samples during 360 scan
+
+    const int SCAN_SECTIONS =
+        16;
+
+
+    // Require this much center clearance
+    // to consider a direction usable.
+
+    const double
+        MIN_GOOD_CLEARANCE = 1.50;
+
+
+    // --------------------------------------------------------
+    // REVERSE SETTINGS
+    // --------------------------------------------------------
+
+    const int REVERSE_PWM =
+        70;
+
+    const milliseconds
+        REVERSE_TIME(700);
+
+
+    // --------------------------------------------------------
+    // STOP BEFORE SCAN
+    // --------------------------------------------------------
+
+    const milliseconds
+        STUCK_TIME(800);
+
+
+    // --------------------------------------------------------
+    // MANUAL DEAD MAN
+    // --------------------------------------------------------
+
+    bool moving =
+        false;
+
+    char currentMovement =
+        'S';
+
     auto lastMovementCommand =
         steady_clock::now();
-
 
     const milliseconds
         STOP_TIMEOUT(220);
 
 
+    // --------------------------------------------------------
+    // AUTO TIMERS
+    // --------------------------------------------------------
+
     auto lastAutoUpdate =
         steady_clock::now();
-
 
     const milliseconds
         AUTO_UPDATE_INTERVAL(100);
 
 
-    // --------------------------------------------------------
-    // INITIAL MOTOR STATE
-    // --------------------------------------------------------
+    auto stopStart =
+        steady_clock::now();
+
+    auto scanStart =
+        steady_clock::now();
+
+    auto turnStart =
+        steady_clock::now();
+
+    auto reverseStart =
+        steady_clock::now();
+
+
+    // ========================================================
+    // SCAN VARIABLES
+    // ========================================================
+
+    double bestClearance =
+        0.0;
+
+    int bestSection =
+        0;
+
+    int lastScanSection =
+        -1;
+
+
+    // ========================================================
+    // INITIAL STOP
+    // ========================================================
 
     sendCommand(
         esp,
         'S'
     );
 
-
     setLeftSpeed(
         esp,
         leftSpeed
     );
 
-
     this_thread::sleep_for(
-        milliseconds(60)
+        milliseconds(50)
     );
-
 
     setRightSpeed(
         esp,
@@ -554,80 +556,34 @@ int main()
     );
 
 
-    // --------------------------------------------------------
-    // DISPLAY CONTROLS
-    // --------------------------------------------------------
+    // ========================================================
+    // CONTROLS
+    // ========================================================
 
     cout << "\n";
+    cout << "=============================\n";
+    cout << "        ROVER CONTROL\n";
+    cout << "=============================\n\n";
 
-    cout
-        << "=============================\n";
+    cout << "W = Forward\n";
+    cout << "S = Reverse\n";
+    cout << "A = Left\n";
+    cout << "D = Right\n\n";
 
-    cout
-        << "        ROVER CONTROL\n";
+    cout << "U = Left PWM +5\n";
+    cout << "J = Left PWM -5\n";
+    cout << "I = Right PWM +5\n";
+    cout << "K = Right PWM -5\n";
+    cout << "P = Show PWM\n\n";
 
-    cout
-        << "=============================\n\n";
-
-
-    cout
-        << "Hold W = Forward\n";
-
-    cout
-        << "Hold A = Left\n";
-
-    cout
-        << "Hold D = Right\n\n";
-     cout
-        << "Hold S = Reverse\n\n";
-
-    cout
-        << "U = Left PWM +5\n";
-
-    cout
-        << "J = Left PWM -5\n";
-
-    cout
-        << "I = Right PWM +5\n";
-
-    cout
-        << "K = Right PWM -5\n";
-
-    cout
-        << "P = Show PWM\n\n";
+    cout << "M     = Manual / Auto\n";
+    cout << "SPACE = STOP\n";
+    cout << "Q     = Quit\n\n";
 
 
-    cout
-        << "SPACE = STOP\n";
-
-    cout
-        << "M     = Manual / Auto\n";
-
-    cout
-        << "Q     = Quit\n\n";
-
-
-    cout
-        << "MODE: MANUAL\n";
-
-    cout
-        << "LEFT PWM:  "
-        << leftSpeed
-        << "\n";
-
-    cout
-        << "RIGHT PWM: "
-        << rightSpeed
-        << "\n";
-
-
-    cout
-        << "=============================\n\n";
-
-
-    // --------------------------------------------------------
+    // ========================================================
     // MAIN LOOP
-    // --------------------------------------------------------
+    // ========================================================
 
     bool running =
         true;
@@ -647,14 +603,15 @@ int main()
 
 
         // ====================================================
-        // KEYBOARD INPUT
+        // KEYBOARD
         // ====================================================
 
         if (bytes > 0)
         {
             if (
                 key >= 'A'
-                && key <= 'Z'
+                &&
+                key <= 'Z'
             )
             {
                 key =
@@ -665,7 +622,7 @@ int main()
 
 
             // ------------------------------------------------
-            // EMERGENCY STOP
+            // STOP
             // ------------------------------------------------
 
             if (key == ' ')
@@ -675,14 +632,10 @@ int main()
                     'S'
                 );
 
+                moving = false;
 
-                moving =
-                    false;
-
-
-                currentMovement =
-                    'S';
-
+                autoState =
+                    AUTO_DRIVE;
 
                 cout
                     << "\n*** STOP ***\n";
@@ -700,18 +653,13 @@ int main()
                     'S'
                 );
 
-
-                cout
-                    << "\nStopping rover...\n";
-
-
                 running =
                     false;
             }
 
 
             // ------------------------------------------------
-            // MODE SWITCH
+            // MODE
             // ------------------------------------------------
 
             else if (key == 'm')
@@ -721,13 +669,11 @@ int main()
                     'S'
                 );
 
-
                 moving =
                     false;
 
-
-                currentMovement =
-                    'S';
+                autoState =
+                    AUTO_DRIVE;
 
 
                 if (mode == MANUAL)
@@ -735,23 +681,8 @@ int main()
                     mode =
                         AUTO;
 
-
-                    cout << "\n";
-
                     cout
-                        << "=============================\n";
-
-                    cout
-                        << "       AUTONOMOUS MODE\n";
-
-                    cout
-                        << "=============================\n";
-
-                    cout
-                        << "Camera navigation enabled.\n";
-
-                    cout
-                        << "No autonomous reverse.\n\n";
+                        << "\nAUTO MODE\n";
                 }
 
                 else
@@ -759,65 +690,39 @@ int main()
                     mode =
                         MANUAL;
 
-
-                    // Restore manual PWM
-
                     setLeftSpeed(
                         esp,
                         leftSpeed
                     );
-
-
-                    this_thread::sleep_for(
-                        milliseconds(20)
-                    );
-
 
                     setRightSpeed(
                         esp,
                         rightSpeed
                     );
 
-
-                    cout << "\n";
-
                     cout
-                        << "=============================\n";
-
-                    cout
-                        << "          MANUAL MODE\n";
-
-                    cout
-                        << "=============================\n\n";
+                        << "\nMANUAL MODE\n";
                 }
             }
 
 
             // ------------------------------------------------
-            // LEFT PWM +
+            // PWM CONTROLS
             // ------------------------------------------------
 
             else if (key == 'u')
             {
-                leftSpeed +=
-                    SPEED_STEP;
-
-
                 leftSpeed =
                     min(
                         255,
-                        leftSpeed
+                        leftSpeed + SPEED_STEP
                     );
 
-
                 if (mode == MANUAL)
-                {
                     setLeftSpeed(
                         esp,
                         leftSpeed
                     );
-                }
-
 
                 cout
                     << "LEFT PWM: "
@@ -825,32 +730,20 @@ int main()
                     << "\n";
             }
 
-
-            // ------------------------------------------------
-            // LEFT PWM -
-            // ------------------------------------------------
 
             else if (key == 'j')
             {
-                leftSpeed -=
-                    SPEED_STEP;
-
-
                 leftSpeed =
                     max(
                         0,
-                        leftSpeed
+                        leftSpeed - SPEED_STEP
                     );
 
-
                 if (mode == MANUAL)
-                {
                     setLeftSpeed(
                         esp,
                         leftSpeed
                     );
-                }
-
 
                 cout
                     << "LEFT PWM: "
@@ -859,31 +752,19 @@ int main()
             }
 
 
-            // ------------------------------------------------
-            // RIGHT PWM +
-            // ------------------------------------------------
-
             else if (key == 'i')
             {
-                rightSpeed +=
-                    SPEED_STEP;
-
-
                 rightSpeed =
                     min(
                         255,
-                        rightSpeed
+                        rightSpeed + SPEED_STEP
                     );
 
-
                 if (mode == MANUAL)
-                {
                     setRightSpeed(
                         esp,
                         rightSpeed
                     );
-                }
-
 
                 cout
                     << "RIGHT PWM: "
@@ -891,32 +772,20 @@ int main()
                     << "\n";
             }
 
-
-            // ------------------------------------------------
-            // RIGHT PWM -
-            // ------------------------------------------------
 
             else if (key == 'k')
             {
-                rightSpeed -=
-                    SPEED_STEP;
-
-
                 rightSpeed =
                     max(
                         0,
-                        rightSpeed
+                        rightSpeed - SPEED_STEP
                     );
 
-
                 if (mode == MANUAL)
-                {
                     setRightSpeed(
                         esp,
                         rightSpeed
                     );
-                }
-
 
                 cout
                     << "RIGHT PWM: "
@@ -925,28 +794,19 @@ int main()
             }
 
 
-            // ------------------------------------------------
-            // SHOW PWM
-            // ------------------------------------------------
-
             else if (key == 'p')
             {
-                cout << "\n";
-
                 cout
-                    << "BASE LEFT PWM:  "
+                    << "LEFT PWM: "
                     << leftSpeed
-                    << "\n";
-
-                cout
-                    << "BASE RIGHT PWM: "
+                    << " RIGHT PWM: "
                     << rightSpeed
-                    << "\n\n";
+                    << "\n";
             }
 
 
             // =================================================
-            // MANUAL MOVEMENT
+            // MANUAL WASD
             // =================================================
 
             else if (mode == MANUAL)
@@ -957,34 +817,28 @@ int main()
 
                 if (key == 'w')
                 {
-                    command =
-                        'F';
-                }
-
-
-                // Physical steering correction:
-                // keyboard LEFT sends ESP command R.
-
-                else if (key == 'a')
-                {
-                    command =
-                        'R';
-                }
-
-
-                // Physical steering correction:
-                // keyboard RIGHT sends ESP command L.
-
-                else if (key == 'd')
-                {
-                    command =
-                        'L';
+                    command = 'F';
                 }
 
                 else if (key == 's')
-{
-    command = 'B';
-}
+                {
+                    command = 'B';
+                }
+
+                // Your physical steering is reversed
+                // relative to the ESP commands.
+
+                else if (key == 'a')
+                {
+                    command = 'R';
+                }
+
+                else if (key == 'd')
+                {
+                    command = 'L';
+                }
+
+
                 if (command != 0)
                 {
                     if (
@@ -999,49 +853,11 @@ int main()
                             command
                         );
 
-
                         currentMovement =
                             command;
 
-
                         moving =
                             true;
-
-
-                        if (key == 'w')
-                        {
-                            cout
-                                << "FORWARD"
-                                << "  L="
-                                << leftSpeed
-                                << " R="
-                                << rightSpeed
-                                << "\n";
-                        }
-
-
-                        else if (key == 'a')
-                        {
-                            cout
-                                << "LEFT\n";
-                        }
-                            else if (key == 's')
-{
-    cout
-        << "REVERSE"
-        << "  L="
-        << leftSpeed
-        << " R="
-        << rightSpeed
-        << "\n";
-}
-
-
-                        else if (key == 'd')
-                        {
-                            cout
-                                << "RIGHT\n";
-                        }
                     }
 
 
@@ -1053,28 +869,26 @@ int main()
 
 
         // ====================================================
-        // MANUAL DEAD-MAN STOP
+        // MANUAL DEAD-MAN
         // ====================================================
 
         if (
             mode == MANUAL
-            && moving
+            &&
+            moving
         )
         {
             auto now =
                 steady_clock::now();
 
 
-            auto elapsed =
+            if (
                 duration_cast<milliseconds>(
                     now
                     - lastMovementCommand
-                );
-
-
-            if (
-                elapsed
-                > STOP_TIMEOUT
+                )
+                >
+                STOP_TIMEOUT
             )
             {
                 sendCommand(
@@ -1082,23 +896,17 @@ int main()
                     'S'
                 );
 
-
                 moving =
                     false;
 
-
                 currentMovement =
                     'S';
-
-
-                cout
-                    << "STOP\n";
             }
         }
 
 
         // ====================================================
-        // AUTONOMOUS MODE
+        // AUTONOMOUS
         // ====================================================
 
         if (mode == AUTO)
@@ -1107,97 +915,85 @@ int main()
                 steady_clock::now();
 
 
-            auto elapsed =
-                duration_cast<milliseconds>(
-                    now
-                    - lastAutoUpdate
-                );
-
+            // =================================================
+            // NORMAL DRIVE
+            // =================================================
 
             if (
-                elapsed
-                >= AUTO_UPDATE_INTERVAL
+                autoState
+                == AUTO_DRIVE
             )
             {
-                lastAutoUpdate =
-                    now;
-
-
-                NavData nav;
-
-
-                // --------------------------------------------
-                // NO NAVIGATION FILE
-                // --------------------------------------------
-
-                if (!readNavigation(nav))
-                {
-                    sendCommand(
-                        esp,
-                        'S'
-                    );
-
-
-                    cout
-                        << "AUTO: NO CAMERA DATA -> STOP\n";
-                }
-
-
-                // --------------------------------------------
-                // STALE CAMERA DATA
-                // --------------------------------------------
-
-                else if (
-                    !navigationFresh(nav)
+                if (
+                    duration_cast<milliseconds>(
+                        now
+                        - lastAutoUpdate
+                    )
+                    >=
+                    AUTO_UPDATE_INTERVAL
                 )
                 {
-                    sendCommand(
-                        esp,
-                        'S'
-                    );
+                    lastAutoUpdate =
+                        now;
 
 
-                    cout
-                        << "AUTO: CAMERA DATA STALE -> STOP\n";
-                }
+                    NavData nav;
 
 
-                // --------------------------------------------
-                // NAVIGATION STOP
-                // --------------------------------------------
+                    // -----------------------------------------
+                    // CAMERA FAILURE
+                    // -----------------------------------------
 
-                else if (
-                    nav.status == "STOP"
-                    ||
-                    nav.throttle <= 0.0
-                )
-                {
-                    sendCommand(
-                        esp,
-                        'S'
-                    );
+                    if (
+                        !readNavigation(nav)
+                        ||
+                        !navigationFresh(nav)
+                    )
+                    {
+                        sendCommand(
+                            esp,
+                            'S'
+                        );
 
+                        cout
+                            << "AUTO: CAMERA ERROR -> STOP\n";
 
-                    cout
-                        << "AUTO: STOP"
-                        << " | L="
-                        << nav.left
-                        << "m"
-                        << " C="
-                        << nav.center
-                        << "m"
-                        << " R="
-                        << nav.right
-                        << "m\n";
-                }
+                        continue;
+                    }
 
 
-                // --------------------------------------------
-                // MOVE
-                // --------------------------------------------
+                    // -----------------------------------------
+                    // BLOCKED
+                    // -----------------------------------------
 
-                else
-                {
+                    if (
+                        nav.status == "STOP"
+                        ||
+                        nav.throttle <= 0.0
+                    )
+                    {
+                        sendCommand(
+                            esp,
+                            'S'
+                        );
+
+                        autoState =
+                            AUTO_STOPPED;
+
+                        stopStart =
+                            now;
+
+                        cout
+                            << "AUTO: BLOCKED\n";
+
+                        continue;
+                    }
+
+
+                    // -----------------------------------------
+                    // NORMAL MOVEMENT
+                    // -----------------------------------------
+
                     int autoLeft;
                     int autoRight;
 
@@ -1217,23 +1013,10 @@ int main()
                         autoLeft
                     );
 
-
-                    this_thread::sleep_for(
-                        milliseconds(10)
-                    );
-
-
                     setRightSpeed(
                         esp,
                         autoRight
                     );
-
-
-                    // Autonomous mode only moves
-                    // the rover FORWARD.
-                    //
-                    // Steering is accomplished by
-                    // changing track PWM.
 
                     sendCommand(
                         esp,
@@ -1244,22 +1027,456 @@ int main()
                     cout
                         << "AUTO: "
                         << nav.status
-                        << " | L="
-                        << nav.left
-                        << "m"
                         << " C="
                         << nav.center
                         << "m"
-                        << " R="
-                        << nav.right
-                        << "m"
-                        << " | steer="
+                        << " steer="
                         << nav.steer
-                        << " | PWM="
+                        << " PWM="
                         << autoLeft
                         << "/"
                         << autoRight
                         << "\n";
+                }
+            }
+
+
+            // =================================================
+            // WAIT BEFORE SCANNING
+            // =================================================
+
+            else if (
+                autoState
+                == AUTO_STOPPED
+            )
+            {
+                sendCommand(
+                    esp,
+                    'S'
+                );
+
+
+                if (
+                    duration_cast<milliseconds>(
+                        now
+                        - stopStart
+                    )
+                    >=
+                    STUCK_TIME
+                )
+                {
+                    cout
+                        << "\nSTARTING 360 SCAN\n";
+
+
+                    bestClearance =
+                        0.0;
+
+                    bestSection =
+                        0;
+
+                    lastScanSection =
+                        -1;
+
+
+                    scanStart =
+                        now;
+
+
+                    setLeftSpeed(
+                        esp,
+                        SCAN_PWM
+                    );
+
+                    setRightSpeed(
+                        esp,
+                        SCAN_PWM
+                    );
+
+
+                    /*
+                     * Your ESP32 R command performs
+                     * an in-place physical turn.
+                     *
+                     * If this rotates the wrong way,
+                     * change 'R' to 'L'.
+                     */
+
+                    sendCommand(
+                        esp,
+                        'R'
+                    );
+
+
+                    autoState =
+                        AUTO_SCAN;
+                }
+            }
+
+
+            // =================================================
+            // 360 SCAN
+            // =================================================
+
+            else if (
+                autoState
+                == AUTO_SCAN
+            )
+            {
+                auto elapsed =
+                    duration_cast<milliseconds>(
+                        now
+                        - scanStart
+                    );
+
+
+                double progress =
+                    static_cast<double>(
+                        elapsed.count()
+                    )
+                    /
+                    FULL_SCAN_TIME.count();
+
+
+                int section =
+                    static_cast<int>(
+                        progress
+                        * SCAN_SECTIONS
+                    );
+
+
+                section =
+                    max(
+                        0,
+                        min(
+                            SCAN_SECTIONS - 1,
+                            section
+                        )
+                    );
+
+
+                // ---------------------------------------------
+                // SAMPLE EACH SECTION
+                // ---------------------------------------------
+
+                if (
+                    section
+                    != lastScanSection
+                )
+                {
+                    lastScanSection =
+                        section;
+
+
+                    NavData nav;
+
+
+                    if (
+                        readNavigation(nav)
+                        &&
+                        navigationFresh(nav)
+                    )
+                    {
+                        /*
+                         * Use CENTER depth because the
+                         * camera is pointing directly
+                         * at the direction currently
+                         * being scanned.
+                         */
+
+                        double clearance =
+                            nav.center;
+
+
+                        if (
+                            !isinf(clearance)
+                            &&
+                            clearance
+                            >
+                            bestClearance
+                        )
+                        {
+                            bestClearance =
+                                clearance;
+
+                            bestSection =
+                                section;
+                        }
+
+
+                        cout
+                            << "SCAN "
+                            << section
+                            << "/"
+                            << SCAN_SECTIONS
+                            << " center="
+                            << clearance
+                            << "m\n";
+                    }
+                }
+
+
+                // ---------------------------------------------
+                // FINISHED 360
+                // ---------------------------------------------
+
+                if (
+                    elapsed
+                    >=
+                    FULL_SCAN_TIME
+                )
+                {
+                    sendCommand(
+                        esp,
+                        'S'
+                    );
+
+
+                    cout
+                        << "\nSCAN COMPLETE\n";
+
+                    cout
+                        << "Best clearance: "
+                        << bestClearance
+                        << "m\n";
+
+
+                    // -----------------------------------------
+                    // NO GOOD PATH
+                    // -----------------------------------------
+
+                    if (
+                        bestClearance
+                        <
+                        MIN_GOOD_CLEARANCE
+                    )
+                    {
+                        cout
+                            << "No safe route."
+                            << " Short reverse.\n";
+
+
+                        setLeftSpeed(
+                            esp,
+                            REVERSE_PWM
+                        );
+
+                        setRightSpeed(
+                            esp,
+                            REVERSE_PWM
+                        );
+
+
+                        sendCommand(
+                            esp,
+                            'B'
+                        );
+
+
+                        reverseStart =
+                            now;
+
+
+                        autoState =
+                            AUTO_REVERSE;
+                    }
+
+
+                    // -----------------------------------------
+                    // TURN TOWARD BEST DIRECTION
+                    // -----------------------------------------
+
+                    else
+                    {
+                        /*
+                         * Each section represents:
+                         *
+                         * 360 / 16 = 22.5 degrees
+                         */
+
+                        double fraction =
+                            static_cast<double>(
+                                bestSection
+                            )
+                            /
+                            SCAN_SECTIONS;
+
+
+                        auto turnDuration =
+                            milliseconds(
+                                static_cast<long>(
+                                    FULL_SCAN_TIME.count()
+                                    *
+                                    fraction
+                                )
+                            );
+
+
+                        cout
+                            << "Best scan section: "
+                            << bestSection
+                            << "\n";
+
+                        cout
+                            << "Turning toward opening...\n";
+
+
+                        setLeftSpeed(
+                            esp,
+                            SCAN_PWM
+                        );
+
+                        setRightSpeed(
+                            esp,
+                            SCAN_PWM
+                        );
+
+
+                        sendCommand(
+                            esp,
+                            'R'
+                        );
+
+
+                        turnStart =
+                            now;
+
+
+                        /*
+                         * Reuse scanStart to store
+                         * the required turn duration.
+                         */
+
+                        scanStart =
+                            steady_clock::time_point(
+                                milliseconds(
+                                    turnDuration.count()
+                                )
+                            );
+
+
+                        autoState =
+                            AUTO_TURN_TO_BEST;
+                    }
+                }
+            }
+
+
+            // =================================================
+            // TURN BACK TO BEST SCAN DIRECTION
+            // =================================================
+
+            else if (
+                autoState
+                == AUTO_TURN_TO_BEST
+            )
+            {
+                /*
+                 * scanStart is being used here to
+                 * store a duration in milliseconds.
+                 */
+
+                long requiredMs =
+                    duration_cast<milliseconds>(
+                        scanStart.time_since_epoch()
+                    ).count();
+
+
+                long elapsedMs =
+                    duration_cast<milliseconds>(
+                        now
+                        - turnStart
+                    ).count();
+
+
+                if (
+                    elapsedMs
+                    >=
+                    requiredMs
+                )
+                {
+                    sendCommand(
+                        esp,
+                        'S'
+                    );
+
+
+                    cout
+                        << "OPENING SELECTED\n";
+
+
+                    setLeftSpeed(
+                        esp,
+                        leftSpeed
+                    );
+
+                    setRightSpeed(
+                        esp,
+                        rightSpeed
+                    );
+
+
+                    autoState =
+                        AUTO_DRIVE;
+
+
+                    lastAutoUpdate =
+                        now;
+                }
+            }
+
+
+            // =================================================
+            // SHORT REVERSE RECOVERY
+            // =================================================
+
+            else if (
+                autoState
+                == AUTO_REVERSE
+            )
+            {
+                if (
+                    duration_cast<milliseconds>(
+                        now
+                        - reverseStart
+                    )
+                    >=
+                    REVERSE_TIME
+                )
+                {
+                    sendCommand(
+                        esp,
+                        'S'
+                    );
+
+
+                    cout
+                        << "REVERSE COMPLETE\n";
+
+
+                    setLeftSpeed(
+                        esp,
+                        leftSpeed
+                    );
+
+                    setRightSpeed(
+                        esp,
+                        rightSpeed
+                    );
+
+
+                    /*
+                     * Return to normal navigation.
+                     * The front camera will immediately
+                     * re-evaluate the situation.
+                     */
+
+                    autoState =
+                        AUTO_DRIVE;
+
+
+                    lastAutoUpdate =
+                        now;
                 }
             }
         }
@@ -1299,7 +1516,7 @@ int main()
 
 
     cout
-        << "Controller closed.\n";
+        << "\nController closed.\n";
 
 
     return 0;
