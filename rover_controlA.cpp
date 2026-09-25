@@ -224,7 +224,7 @@ bool navigationFresh(
     return (
         age >= 0.0
         &&
-        age <= 0.5
+        age <= 2.0
     );
 }
 
