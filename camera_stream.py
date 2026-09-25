@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 
 from flask import Flask, Response
+from ultralytics import YOLO
 
 
 # ============================================================
@@ -35,7 +36,31 @@ app = Flask(__name__)
 # CAMERA
 # ============================================================
 
+print("Starting Astra camera...")
 cam = AstraCamera()
+print("Astra camera ready.")
+
+
+# ============================================================
+# YOLO
+# ============================================================
+
+print("Loading YOLO...")
+
+yolo_model = YOLO("yolo11n.pt")
+
+print("YOLO loaded.")
+
+YOLO_CONFIDENCE = 0.50
+
+# Run YOLO every N frames.
+# Depth navigation still runs every frame.
+YOLO_EVERY_N_FRAMES = 3
+
+frame_counter = 0
+
+# Keep the most recent detections between YOLO frames.
+last_detections = []
 
 
 # ============================================================
@@ -53,7 +78,6 @@ NAV_TEMP_FILE = "/tmp/rover_nav.txt.tmp"
 def distance_text(distance):
 
     if distance == float("inf"):
-
         return "BLOCKED / UNKNOWN"
 
     return f"{distance:.2f} m"
@@ -89,10 +113,6 @@ def publish_navigation(
                 f"{decision['status']}\n"
             )
 
-        # Atomic replacement.
-        # rover_control.cpp will never read
-        # a partially written file.
-
         os.replace(
             NAV_TEMP_FILE,
             NAV_FILE
@@ -107,16 +127,244 @@ def publish_navigation(
 
 
 # ============================================================
+# YOLO DETECTION
+# ============================================================
+
+def run_yolo(frame):
+
+    detections = []
+
+    try:
+
+        results = yolo_model.predict(
+            source=frame,
+            conf=YOLO_CONFIDENCE,
+            device=0,
+            verbose=False
+        )
+
+        result = results[0]
+
+        for box in result.boxes:
+
+            class_id = int(
+                box.cls[0].item()
+            )
+
+            confidence = float(
+                box.conf[0].item()
+            )
+
+            x1, y1, x2, y2 = (
+                box.xyxy[0]
+                .cpu()
+                .numpy()
+                .astype(int)
+            )
+
+            name = yolo_model.names[
+                class_id
+            ]
+
+            detections.append(
+                {
+                    "name": name,
+                    "confidence": confidence,
+                    "box": (
+                        x1,
+                        y1,
+                        x2,
+                        y2
+                    )
+                }
+            )
+
+    except Exception as e:
+
+        print(
+            "YOLO error:",
+            e
+        )
+
+    return detections
+
+
+# ============================================================
+# OBJECT DEPTH
+# ============================================================
+
+def object_distance(
+    depth_mm,
+    box
+):
+
+    x1, y1, x2, y2 = box
+
+    h, w = depth_mm.shape[:2]
+
+    # Keep coordinates inside image.
+    x1 = max(
+        0,
+        min(x1, w - 1)
+    )
+
+    x2 = max(
+        0,
+        min(x2, w)
+    )
+
+    y1 = max(
+        0,
+        min(y1, h - 1)
+    )
+
+    y2 = max(
+        0,
+        min(y2, h)
+    )
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    # Use the center portion of the YOLO box instead of
+    # the entire box. This reduces background depth pixels.
+
+    box_width = x2 - x1
+    box_height = y2 - y1
+
+    cx1 = int(
+        x1 + box_width * 0.25
+    )
+
+    cx2 = int(
+        x2 - box_width * 0.25
+    )
+
+    cy1 = int(
+        y1 + box_height * 0.25
+    )
+
+    cy2 = int(
+        y2 - box_height * 0.25
+    )
+
+    region = depth_mm[
+        cy1:cy2,
+        cx1:cx2
+    ]
+
+    if region.size == 0:
+        return None
+
+    # Ignore invalid depth pixels.
+    valid = region[
+        region > 0
+    ]
+
+    if valid.size < 20:
+        return None
+
+    # Median is more resistant to bad depth pixels.
+    distance_mm = np.median(
+        valid
+    )
+
+    return float(
+        distance_mm
+    ) / 1000.0
+
+
+# ============================================================
+# DRAW YOLO DETECTIONS
+# ============================================================
+
+def draw_detections(
+    frame,
+    depth_mm,
+    detections
+):
+
+    for detection in detections:
+
+        name = detection["name"]
+
+        confidence = detection[
+            "confidence"
+        ]
+
+        box = detection["box"]
+
+        x1, y1, x2, y2 = box
+
+        distance = object_distance(
+            depth_mm,
+            box
+        )
+
+        # Bounding box
+        cv2.rectangle(
+            frame,
+            (x1, y1),
+            (x2, y2),
+            (0, 255, 255),
+            2
+        )
+
+        if distance is not None:
+
+            label = (
+                f"{name} "
+                f"{confidence:.2f} "
+                f"{distance:.2f}m"
+            )
+
+        else:
+
+            label = (
+                f"{name} "
+                f"{confidence:.2f}"
+            )
+
+        # Keep text on screen.
+        text_y = max(
+            20,
+            y1 - 10
+        )
+
+        cv2.putText(
+            frame,
+            label,
+            (
+                x1,
+                text_y
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 255, 255),
+            2
+        )
+
+
+# ============================================================
 # FRAME GENERATOR
 # ============================================================
 
 def generate_frames():
 
+    global frame_counter
+    global last_detections
+
     while True:
+
+        # ----------------------------------------------------
+        # READ ASTRA
+        # ----------------------------------------------------
 
         try:
 
-            color, depth_mm = cam.read()
+            color, depth_mm = (
+                cam.read()
+            )
 
         except Exception as e:
 
@@ -125,11 +373,15 @@ def generate_frames():
                 e
             )
 
+            time.sleep(0.05)
+
             continue
 
 
         # ----------------------------------------------------
-        # DEPTH ANALYSIS
+        # DEPTH NAVIGATION
+        #
+        # This still runs EVERY frame.
         # ----------------------------------------------------
 
         left_m, center_m, right_m = (
@@ -151,11 +403,16 @@ def generate_frames():
             )
         )
 
-        status = decision["status"]
+        status = decision[
+            "status"
+        ]
 
 
         # ----------------------------------------------------
-        # PUBLISH DATA FOR C++ MOTOR CONTROLLER
+        # PUBLISH MOTOR NAVIGATION
+        #
+        # Do this BEFORE YOLO so AI processing does not delay
+        # the navigation update unnecessarily.
         # ----------------------------------------------------
 
         publish_navigation(
@@ -163,6 +420,36 @@ def generate_frames():
             center_m,
             right_m,
             decision
+        )
+
+
+        # ----------------------------------------------------
+        # YOLO
+        # ----------------------------------------------------
+
+        frame_counter += 1
+
+        if (
+            frame_counter
+            % YOLO_EVERY_N_FRAMES
+            == 0
+        ):
+
+            last_detections = (
+                run_yolo(
+                    color
+                )
+            )
+
+
+        # ----------------------------------------------------
+        # DRAW YOLO OBJECTS
+        # ----------------------------------------------------
+
+        draw_detections(
+            color,
+            depth_mm,
+            last_detections
         )
 
 
@@ -198,8 +485,14 @@ def generate_frames():
 
         cv2.line(
             color,
-            (zone_width, y0),
-            (zone_width, y1),
+            (
+                zone_width,
+                y0
+            ),
+            (
+                zone_width,
+                y1
+            ),
             (255, 255, 255),
             2
         )
@@ -265,7 +558,7 @@ def generate_frames():
 
 
         # ----------------------------------------------------
-        # LEFT DISTANCE
+        # LEFT
         # ----------------------------------------------------
 
         cv2.putText(
@@ -298,7 +591,7 @@ def generate_frames():
 
 
         # ----------------------------------------------------
-        # CENTER DISTANCE
+        # CENTER
         # ----------------------------------------------------
 
         cv2.putText(
@@ -331,7 +624,7 @@ def generate_frames():
 
 
         # ----------------------------------------------------
-        # RIGHT DISTANCE
+        # RIGHT
         # ----------------------------------------------------
 
         cv2.putText(
@@ -393,7 +686,7 @@ def generate_frames():
 
 
         # ----------------------------------------------------
-        # STATUS TEXT
+        # STATUS
         # ----------------------------------------------------
 
         cv2.putText(
@@ -423,7 +716,28 @@ def generate_frames():
 
 
         # ----------------------------------------------------
-        # JPEG ENCODING
+        # AI STATUS
+        # ----------------------------------------------------
+
+        cv2.putText(
+            color,
+            (
+                f"AI objects: "
+                f"{len(last_detections)}"
+            ),
+            (
+                20,
+                h - 20
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 255, 255),
+            2
+        )
+
+
+        # ----------------------------------------------------
+        # JPEG
         # ----------------------------------------------------
 
         success, buffer = (
@@ -438,12 +752,9 @@ def generate_frames():
         )
 
         if not success:
-
             continue
 
-
         frame = buffer.tobytes()
-
 
         yield (
             b"--frame\r\n"
@@ -466,7 +777,7 @@ def index():
         <head>
 
             <title>
-                Delivery Rover Camera
+                AI Delivery Rover
             </title>
 
         </head>
@@ -474,7 +785,7 @@ def index():
         <body>
 
             <h1>
-                Delivery Rover Camera
+                AI Delivery Rover Camera
             </h1>
 
             <img
@@ -511,8 +822,17 @@ def video_feed():
 
 if __name__ == "__main__":
 
-    app.run(
-        host="0.0.0.0",
-        port=5000,
-        threaded=True
-    )
+    try:
+
+        app.run(
+            host="0.0.0.0",
+            port=5000,
+            threaded=True
+        )
+
+    finally:
+
+        try:
+            cam.release()
+        except Exception:
+            pass
